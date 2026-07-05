@@ -3,6 +3,8 @@ import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { api, type Server, type TreeNode } from "@/lib/api";
 import {
+  computeNetRates,
+  formatBitrate,
   formatBytes,
   formatDuration,
   formatLoad,
@@ -38,10 +40,12 @@ function MetricBar({
   label,
   value,
   detail,
+  barClassName,
 }: {
   label: string;
   value: number | null;
   detail: string;
+  barClassName?: string;
 }) {
   const percent = value ?? 0;
   return (
@@ -54,10 +58,155 @@ function MetricBar({
         <div
           className={cn(
             "h-full transition-all",
-            percent >= 90 ? "bg-red-400" : "bg-[var(--color-primary)]",
+            barClassName ??
+              (percent >= 90 ? "bg-red-400" : "bg-[var(--color-primary)]"),
           )}
           style={{ width: `${Math.max(0, Math.min(100, percent))}%` }}
         />
+      </div>
+    </div>
+  );
+}
+
+interface BandwidthSample {
+  rx: number;
+  tx: number;
+  at: number;
+}
+
+const BANDWIDTH_POLL_MS = 5000;
+const BANDWIDTH_HISTORY_MS = 2 * 60 * 1000;
+const BANDWIDTH_MAX_SLOTS = Math.floor(BANDWIDTH_HISTORY_MS / BANDWIDTH_POLL_MS);
+const BANDWIDTH_CHART_HEIGHT_PX = 56;
+
+function barHeightPx(value: number, max: number): number {
+  if (max <= 0) return 2;
+  return Math.max(2, Math.round((value / max) * BANDWIDTH_CHART_HEIGHT_PX));
+}
+
+function trimBandwidthHistory(
+  samples: BandwidthSample[],
+  now: number,
+): BandwidthSample[] {
+  const cutoff = now - BANDWIDTH_HISTORY_MS;
+  return samples.filter((sample) => sample.at >= cutoff);
+}
+
+/** Pad to a fixed slot count; newest samples align to the right. */
+function buildBandwidthSlots(
+  history: BandwidthSample[],
+): (BandwidthSample | null)[] {
+  const slots: (BandwidthSample | null)[] = Array.from(
+    { length: BANDWIDTH_MAX_SLOTS },
+    () => null,
+  );
+  const filled = history.slice(-BANDWIDTH_MAX_SLOTS);
+  const offset = BANDWIDTH_MAX_SLOTS - filled.length;
+  for (let i = 0; i < filled.length; i++) {
+    slots[offset + i] = filled[i]!;
+  }
+  return slots;
+}
+
+function BandwidthChart({
+  rxRate,
+  txRate,
+  history,
+}: {
+  rxRate: number | null;
+  txRate: number | null;
+  history: BandwidthSample[];
+}) {
+  const historyRxMax = Math.max(...history.map((sample) => sample.rx), 0);
+  const historyTxMax = Math.max(...history.map((sample) => sample.tx), 0);
+  const rxScaleMax = historyRxMax > 0 ? historyRxMax : 1;
+  const txScaleMax = historyTxMax > 0 ? historyTxMax : 1;
+  const slots = buildBandwidthSlots(history);
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between text-[11px]">
+        <span className="text-[var(--color-muted-foreground)]">带宽</span>
+        <span>
+          ↓ {formatBitrate(rxRate)} · ↑ {formatBitrate(txRate)}
+        </span>
+      </div>
+
+      <MetricBar
+        label="下载"
+        value={
+          rxRate !== null && rxScaleMax > 0
+            ? Math.min(100, (rxRate / rxScaleMax) * 100)
+            : null
+        }
+        detail={formatBitrate(rxRate)}
+        barClassName="bg-sky-400"
+      />
+      <MetricBar
+        label="上传"
+        value={
+          txRate !== null && txScaleMax > 0
+            ? Math.min(100, (txRate / txScaleMax) * 100)
+            : null
+        }
+        detail={formatBitrate(txRate)}
+        barClassName="bg-emerald-400"
+      />
+
+      <div className="space-y-1">
+        <div className="flex items-center justify-between gap-2 text-[10px] text-[var(--color-muted-foreground)]">
+          <span>
+            近 2 分钟 · {history.length}/{BANDWIDTH_MAX_SLOTS} 次采样
+          </span>
+          {history.length > 0 && (
+            <span className="truncate text-right">
+              峰值 ↓ {formatBitrate(historyRxMax || null)} · ↑{" "}
+              {formatBitrate(historyTxMax || null)}
+            </span>
+          )}
+        </div>
+        <div className="h-16 rounded-sm bg-[var(--color-secondary)]/40 p-1">
+          <div className="flex h-full items-end gap-px">
+            {slots.map((sample, index) => (
+              <div
+                key={index}
+                className="flex h-full min-w-0 flex-1 items-end justify-center gap-px"
+              >
+                {sample ? (
+                  <>
+                    <div
+                      className="w-1/2 bg-sky-400/90 transition-all"
+                      style={{
+                        height: `${barHeightPx(sample.rx, rxScaleMax)}px`,
+                      }}
+                      title={`${new Date(sample.at).toLocaleTimeString()} 下载 ${formatBitrate(sample.rx)}`}
+                    />
+                    <div
+                      className="w-1/2 bg-emerald-400/90 transition-all"
+                      style={{
+                        height: `${barHeightPx(sample.tx, txScaleMax)}px`,
+                      }}
+                      title={`${new Date(sample.at).toLocaleTimeString()} 上传 ${formatBitrate(sample.tx)}`}
+                    />
+                  </>
+                ) : (
+                  <>
+                    <div className="w-1/2 rounded-sm bg-[var(--color-secondary)]/80" />
+                    <div className="w-1/2 rounded-sm bg-[var(--color-secondary)]/80" />
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="flex justify-between text-[10px] text-[var(--color-muted-foreground)]">
+          <span>2 分钟前</span>
+          <span>现在</span>
+        </div>
+        <div className="flex justify-between text-[10px] text-[var(--color-muted-foreground)]">
+          <span>↓ 下载</span>
+          <span>↑ 上传</span>
+        </div>
       </div>
     </div>
   );
@@ -71,16 +220,24 @@ export function StatusWidget({
   const session = activeServerId ? sessions[activeServerId] : null;
   const server = activeServerId ? findServer(tree, activeServerId) : null;
   const mountedRef = useRef(true);
+  const lastNetSampleRef = useRef<{
+    rxBytes: number;
+    txBytes: number;
+    at: number;
+  } | null>(null);
   const [metrics, setMetrics] = useState<ServerStatusMetrics | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
+  const [bandwidthHistory, setBandwidthHistory] = useState<BandwidthSample[]>([]);
 
   const fetchStatus = useCallback(async () => {
     if (!session || session.status !== "open") {
       setMetrics(null);
       setError(null);
       setUpdatedAt(null);
+      setBandwidthHistory([]);
+      lastNetSampleRef.current = null;
       return;
     }
 
@@ -89,8 +246,41 @@ export function StatusWidget({
     try {
       const response = await api.getSessionStatus(session.sessionId);
       if (!mountedRef.current) return;
-      setMetrics(response.metrics);
+
+      const at = Date.parse(response.collectedAt) || Date.now();
+      const { netRxRate, netTxRate, sample } = computeNetRates(
+        response.metrics.netRxBytes,
+        response.metrics.netTxBytes,
+        lastNetSampleRef.current,
+        at,
+      );
+      if (sample) {
+        lastNetSampleRef.current = sample;
+      }
+
+      const nextMetrics: ServerStatusMetrics = {
+        ...response.metrics,
+        netRxRate,
+        netTxRate,
+      };
+      setMetrics(nextMetrics);
       setUpdatedAt(response.collectedAt);
+
+      if (netRxRate !== null && netTxRate !== null) {
+        setBandwidthHistory((current) =>
+          trimBandwidthHistory(
+            [
+              ...current,
+              {
+                rx: netRxRate,
+                tx: netTxRate,
+                at,
+              },
+            ],
+            at,
+          ),
+        );
+      }
     } catch (err) {
       if (!mountedRef.current) return;
       setError(err instanceof Error ? err.message : "获取状态失败");
@@ -107,12 +297,17 @@ export function StatusWidget({
   }, []);
 
   useEffect(() => {
+    setBandwidthHistory([]);
+    lastNetSampleRef.current = null;
+  }, [session?.sessionId]);
+
+  useEffect(() => {
     void fetchStatus();
     if (!session || session.status !== "open") return;
 
     const timer = window.setInterval(() => {
       void fetchStatus();
-    }, 5000);
+    }, BANDWIDTH_POLL_MS);
 
     return () => window.clearInterval(timer);
   }, [fetchStatus, session?.sessionId, session?.status]);
@@ -203,6 +398,12 @@ export function StatusWidget({
                   )} 可用 / ${formatBytes(metrics.diskTotal)}`
                 : "-"
             }
+          />
+
+          <BandwidthChart
+            rxRate={metrics.netRxRate}
+            txRate={metrics.netTxRate}
+            history={bandwidthHistory}
           />
 
           <div className="grid grid-cols-1 gap-2 text-[11px]">

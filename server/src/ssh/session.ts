@@ -147,7 +147,11 @@ export class SSHSession {
     this.transport = new SSHTransport();
     this.packetParser = new SSHPacketParser();
     this.shellChannel = new SSHChannel();
-    this.channels.set(0, this.shellChannel);
+    if (execOnly) {
+      this.nextChannelID = 0;
+    } else {
+      this.channels.set(0, this.shellChannel);
+    }
     this.updateTerminalSize(config.cols, config.rows);
   }
 
@@ -184,11 +188,12 @@ export class SSHSession {
 
   async execCommand(command: string, timeoutMs = 15000): Promise<ExecResult> {
     if (!this.execOnly) {
-      throw new Error('此会话不支持远程命令执行');
+      return Promise.reject(new Error('Exec 命令仅支持 exec-only 会话'));
     }
 
-    const run = () => this.runExecViaChannel(command, timeoutMs);
-    const result = this.execChain.then(run);
+    const result = this.execChain.then(() =>
+      this.runExecViaChannel(command, timeoutMs),
+    );
     this.execChain = result.then(
       () => {},
       () => {},
@@ -243,28 +248,50 @@ export class SSHSession {
   }
 
   private finalizeExec(exitCode: number): void {
+    void this.completeExecAsync(exitCode);
+  }
+
+  private async completeExecAsync(exitCode: number): Promise<void> {
     const pending = this.pendingExec;
     if (!pending || pending.finished) return;
 
     pending.finished = true;
     clearTimeout(pending.timer);
-    this.channels.delete(pending.channelID);
-    this.pendingExec = null;
-
-    pending.resolve({
+    const channelID = pending.channelID;
+    const result = {
       stdout: this.textDecoder.decode(this.concatChunks(pending.stdout)),
       stderr: this.textDecoder.decode(this.concatChunks(pending.stderr)),
       exitCode,
-    });
+    };
+
+    try {
+      await this.closeExecChannel(channelID);
+    } catch {
+      // ignore
+    }
+
+    this.pendingExec = null;
+    pending.resolve(result);
   }
 
   private failExec(error: Error): void {
+    void this.failExecAsync(error);
+  }
+
+  private async failExecAsync(error: Error): Promise<void> {
     const pending = this.pendingExec;
     if (!pending || pending.finished) return;
 
     pending.finished = true;
     clearTimeout(pending.timer);
-    this.channels.delete(pending.channelID);
+    const channelID = pending.channelID;
+
+    try {
+      await this.closeExecChannel(channelID);
+    } catch {
+      // ignore
+    }
+
     this.pendingExec = null;
     pending.reject(error);
   }
@@ -1260,7 +1287,7 @@ export class SSHSession {
           try {
             this.ws.send(this.textDecoder.decode(stderrData));
           } catch (e) {
-            this.sendDebug(() => `Send stderr output failed: ${e instanceof Error ? e.message : e}`);
+            this.sendDebug(() => `Send shell output failed: ${e instanceof Error ? e.message : e}`);
           }
           this.queueLocalWindowAdjust(stderrData.length, channel);
         } else if (this.pendingExec && channelID === this.pendingExec.channelID) {
@@ -1291,7 +1318,7 @@ export class SSHSession {
 
       case SSH_MSG_CHANNEL_EOF: {
         const channelID = this.getChannelIDFromPayload(payload);
-        if (channelID === this.shellChannel.getLocalChannelID()) {
+        if (!this.execOnly && channelID === this.shellChannel.getLocalChannelID()) {
           // Shell channel EOF - close connection
           this.sendStatus('会话已结束');
           this.close(true);
@@ -1314,7 +1341,7 @@ export class SSHSession {
 
       case SSH_MSG_CHANNEL_CLOSE: {
         const channelID = this.getChannelIDFromPayload(payload);
-        if (channelID === this.shellChannel.getLocalChannelID()) {
+        if (!this.execOnly && channelID === this.shellChannel.getLocalChannelID()) {
           // Shell channel closed - close connection
           this.sendStatus('会话已结束');
           this.close(true);
@@ -1350,10 +1377,8 @@ export class SSHSession {
           if (requestType === 'exit-status') {
             offset += 1;
             const exitCode = readUint32(payload, offset);
-            void this.closeExecChannel(this.pendingExec.channelID);
             this.finalizeExec(exitCode);
           } else if (requestType === 'exit-signal') {
-            void this.closeExecChannel(this.pendingExec.channelID);
             this.finalizeExec(128);
           }
         }
@@ -1756,6 +1781,7 @@ export class SSHSession {
   }
 
   close(normal: boolean = false): void {
+    this.state = 'connecting';
     if (this.keepaliveInterval) {
       clearInterval(this.keepaliveInterval);
       this.keepaliveInterval = null;

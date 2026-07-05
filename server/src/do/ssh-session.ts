@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { getCredentialValue, getServer } from "../db/servers";
 import {
+  computeNetRates,
   parseStatusOutput,
   STATUS_COMMAND,
 } from "../lib/server-status";
@@ -22,6 +23,9 @@ export class SshSession extends DurableObject<Env> {
   private bootstrapping: Promise<void> | null = null;
   private statusBootstrapping: Promise<void> | null = null;
   private connectionConfig: SSHConnectionConfig | null = null;
+  private lastNetSample: { rxBytes: number; txBytes: number; at: number } | null =
+    null;
+  private statusCollectChain: Promise<void> = Promise.resolve();
 
   async fetch(request: Request): Promise<Response> {
     const parsed = parseRequestUrl(request.url);
@@ -125,8 +129,8 @@ export class SshSession extends DurableObject<Env> {
       this.sshSession?.close();
       this.sshSession = null;
       this.bootstrapping = null;
-      this.closeStatusSession();
       this.connectionConfig = null;
+      this.closeStatusSession(true);
       for (const sftpWs of this.sftpSockets) {
         try {
           sftpWs.close(1000, "Terminal session closed");
@@ -158,13 +162,28 @@ export class SshSession extends DurableObject<Env> {
           }
 
           await this.ensureStatusSession(config);
+          if (!this.statusSession?.isSSHReady()) {
+            throw new Error("状态采集连接未就绪");
+          }
 
-          const result = await this.statusSession!.execCommand(STATUS_COMMAND);
-          const metrics = parseStatusOutput(result.stdout);
+          const result = await this.collectStatusMetrics(config);
+          const parsed = parseStatusOutput(result.stdout);
+          const now = Date.now();
+          const { netRxRate, netTxRate, sample } = computeNetRates(
+            parsed.netRxBytes,
+            parsed.netTxBytes,
+            this.lastNetSample,
+            now,
+          );
+          if (sample) {
+            this.lastNetSample = sample;
+          }
+          parsed.metrics.netRxRate = netRxRate;
+          parsed.metrics.netTxRate = netTxRate;
           return Response.json({
             serverId: session.server_id,
-            collectedAt: new Date().toISOString(),
-            metrics,
+            collectedAt: new Date(now).toISOString(),
+            metrics: parsed.metrics,
           });
         } catch (error) {
           const message =
@@ -222,10 +241,13 @@ export class SshSession extends DurableObject<Env> {
     return this.connectionConfig;
   }
 
-  private closeStatusSession(): void {
+  private closeStatusSession(clearNetSample = false): void {
     this.statusSession?.close();
     this.statusSession = null;
     this.statusBootstrapping = null;
+    if (clearNetSample) {
+      this.lastNetSample = null;
+    }
   }
 
   private async ensureStatusSession(
@@ -264,7 +286,6 @@ export class SshSession extends DurableObject<Env> {
         true,
       );
       this.statusSession = session;
-      // Dedicated exec-only SSH connection: no PTY, no terminal shell, no history.
       await session.startHandshake();
       await this.waitForStatusReady(30_000);
     })();
@@ -287,17 +308,56 @@ export class SshSession extends DurableObject<Env> {
     throw new Error("状态采集连接未就绪");
   }
 
+  private isRetriableStatusError(message: string): boolean {
+    return (
+      message.includes("open failed") ||
+      message.includes("Exec 通道打开失败") ||
+      message.includes("Exec 请求被拒绝") ||
+      message.includes("已有命令正在执行") ||
+      message.includes("命令执行超时") ||
+      message.includes("SSH 连接未就绪")
+    );
+  }
+
+  private async collectStatusMetrics(config: SSHConnectionConfig) {
+    const run = async () => {
+      try {
+        return await this.statusSession!.execCommand(STATUS_COMMAND, 12000);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!this.isRetriableStatusError(message)) {
+          throw error;
+        }
+
+        this.closeStatusSession();
+        await this.ensureStatusSession(config);
+        if (!this.statusSession?.isSSHReady()) {
+          throw new Error("状态采集连接未就绪");
+        }
+        return await this.statusSession!.execCommand(STATUS_COMMAND, 12000);
+      }
+    };
+
+    const result = this.statusCollectChain.then(run);
+    this.statusCollectChain = result.then(
+      () => {},
+      () => {},
+    );
+    return result;
+  }
+
   private async startTerminal(
     ws: WebSocket,
     config: SSHConnectionConfig,
   ): Promise<void> {
     this.terminalWs = ws;
+    this.lastNetSample = null;
 
     if (this.sshSession) {
       this.sshSession.close();
       this.sshSession = null;
     }
-    this.closeStatusSession();
+    this.closeStatusSession(true);
 
     try {
       await this.ensureSshSession(ws, config);

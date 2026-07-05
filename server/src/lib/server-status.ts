@@ -17,19 +17,24 @@ export interface ServerStatusMetrics {
   diskUsedPercent: number | null;
   uptimeSeconds: number | null;
   osInfo: string | null;
+  netRxBytes: number | null;
+  netTxBytes: number | null;
+  netRxRate: number | null;
+  netTxRate: number | null;
 }
 
 const STATUS_SCRIPT = [
   'echo "LOAD:$(cut -d" " -f1-3 /proc/loadavg 2>/dev/null)"',
   'MT=$(awk \'/MemTotal/ {print $2; exit}\' /proc/meminfo 2>/dev/null); MA=$(awk \'/MemAvailable/ {print $2; exit}\' /proc/meminfo 2>/dev/null); [ -n "$MA" ] || MA=$(awk \'/MemFree/ {print $2; exit}\' /proc/meminfo 2>/dev/null); echo "MEM:${MT} ${MA}"',
   'echo "DISK:$(df -Pk / 2>/dev/null | awk \'NR==2 {print $2, $3, $4; exit}\')"',
+  'echo "NET:$(awk \'$1 ~ /:/ {gsub(/:/,"",$1); if ($1!="lo") {rx+=$2; tx+=$10}} END {print rx, tx}\' /proc/net/dev 2>/dev/null)"',
   'echo "UPTIME:$(cut -d" " -f1 /proc/uptime 2>/dev/null)"',
   'echo "OS:$(uname -sr 2>/dev/null)"',
 ].join("; ");
 
-// Run via SSH exec (single sh -c). Do not nest `/bin/sh -c` — nested shells break
-// variable assignments like MT=$(awk ...) used for memory collection.
-export const STATUS_COMMAND = `HISTFILE=/dev/null HISTSIZE=0 HISTFILESIZE=0 ${STATUS_SCRIPT}`;
+// Run via a dedicated SSH exec channel (non-interactive). Do not nest `/bin/sh -c`
+// — nested shells break variable assignments like MT=$(awk ...) for memory collection.
+export const STATUS_COMMAND = STATUS_SCRIPT;
 
 function parseNumber(value: string | undefined): number | null {
   if (!value) return null;
@@ -37,7 +42,11 @@ function parseNumber(value: string | undefined): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-export function parseStatusOutput(output: string): ServerStatusMetrics {
+export function parseStatusOutput(output: string): {
+  metrics: ServerStatusMetrics;
+  netRxBytes: number | null;
+  netTxBytes: number | null;
+} {
   const metrics: ServerStatusMetrics = {
     load1: null,
     load5: null,
@@ -51,7 +60,13 @@ export function parseStatusOutput(output: string): ServerStatusMetrics {
     diskUsedPercent: null,
     uptimeSeconds: null,
     osInfo: null,
+    netRxBytes: null,
+    netTxBytes: null,
+    netRxRate: null,
+    netTxRate: null,
   };
+  let netRxBytes: number | null = null;
+  let netTxBytes: number | null = null;
 
   for (const line of output.split("\n")) {
     const trimmed = line.trim();
@@ -95,6 +110,15 @@ export function parseStatusOutput(output: string): ServerStatusMetrics {
         }
         break;
       }
+      case "NET": {
+        if (!value) break;
+        const parts = value.split(/\s+/).filter(Boolean);
+        netRxBytes = parseNumber(parts[0]);
+        netTxBytes = parseNumber(parts[1]);
+        metrics.netRxBytes = netRxBytes;
+        metrics.netTxBytes = netTxBytes;
+        break;
+      }
       case "UPTIME":
         metrics.uptimeSeconds = parseNumber(value.split(/\s+/)[0]);
         break;
@@ -104,7 +128,48 @@ export function parseStatusOutput(output: string): ServerStatusMetrics {
     }
   }
 
-  return metrics;
+  return { metrics, netRxBytes, netTxBytes };
+}
+
+export function computeNetRates(
+  netRxBytes: number | null,
+  netTxBytes: number | null,
+  lastSample: { rxBytes: number; txBytes: number; at: number } | null,
+  now = Date.now(),
+): {
+  netRxRate: number | null;
+  netTxRate: number | null;
+  sample: { rxBytes: number; txBytes: number; at: number } | null;
+} {
+  if (netRxBytes === null || netTxBytes === null) {
+    return { netRxRate: null, netTxRate: null, sample: lastSample };
+  }
+
+  const sample = { rxBytes: netRxBytes, txBytes: netTxBytes, at: now };
+
+  if (!lastSample) {
+    return { netRxRate: null, netTxRate: null, sample };
+  }
+
+  const elapsedSec = (now - lastSample.at) / 1000;
+  if (elapsedSec <= 0) {
+    return { netRxRate: null, netTxRate: null, sample };
+  }
+
+  const deltaRx =
+    netRxBytes >= lastSample.rxBytes
+      ? netRxBytes - lastSample.rxBytes
+      : netRxBytes;
+  const deltaTx =
+    netTxBytes >= lastSample.txBytes
+      ? netTxBytes - lastSample.txBytes
+      : netTxBytes;
+
+  return {
+    netRxRate: deltaRx / elapsedSec,
+    netTxRate: deltaTx / elapsedSec,
+    sample,
+  };
 }
 
 export function formatBytes(bytes: number | null): string {
