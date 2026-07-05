@@ -17,7 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useT } from "@/i18n";
 import {
-  getPrimarySessionForServer,
+  getSftpSessionForServer,
   isSessionAlive,
   type ServerSession,
 } from "@/lib/sessions";
@@ -35,7 +35,6 @@ import { cn } from "@/lib/utils";
 
 export interface FileManagerWidgetProps {
   activeServerId: string | null;
-  activeSessionId: string | null;
   sessions: Record<string, ServerSession>;
 }
 
@@ -92,12 +91,11 @@ function formatModifiedTime(timestamp: number): string {
 
 export function FileManagerWidget({
   activeServerId,
-  activeSessionId,
   sessions,
 }: FileManagerWidgetProps) {
   const t = useT();
   const session = activeServerId
-    ? getPrimarySessionForServer(sessions, activeServerId, activeSessionId)
+    ? getSftpSessionForServer(sessions, activeServerId)
     : null;
   const clientRef = useRef<SftpClient | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);

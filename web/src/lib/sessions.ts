@@ -46,6 +46,14 @@ export function getPrimarySessionForServer(
   );
 }
 
+/** SFTP binds to the first alive session on a server, not the active terminal tab. */
+export function getSftpSessionForServer(
+  sessions: Record<string, ServerSession>,
+  serverId: string,
+): ServerSession | undefined {
+  return getPrimarySessionForServer(sessions, serverId);
+}
+
 export function isServerConnected(
   sessions: Record<string, ServerSession>,
   serverId: string,

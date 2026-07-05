@@ -997,7 +997,6 @@ export function DashboardView() {
             return (
               <FileManagerWidget
                 activeServerId={activeServerId}
-                activeSessionId={activeSessionId}
                 sessions={sessions}
               />
             );
