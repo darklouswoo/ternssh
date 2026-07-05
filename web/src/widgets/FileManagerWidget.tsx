@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type MouseEvent } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type MouseEvent } from "react";
 import {
   ArrowUp,
   Download,
@@ -26,12 +26,19 @@ import {
   collectFileInputItems,
   joinRemotePath,
   isRemoteRoot,
+  MAX_SFTP_TEXT_EDIT_SIZE,
   parentRemotePath,
   SftpClient,
   sortSftpEntries,
   type SftpEntry,
 } from "@/lib/sftp-client";
 import { cn } from "@/lib/utils";
+
+const FileEditorDialog = lazy(() =>
+  import("@/widgets/FileEditorDialog").then((module) => ({
+    default: module.FileEditorDialog,
+  })),
+);
 
 export interface FileManagerWidgetProps {
   activeServerId: string | null;
@@ -55,6 +62,13 @@ interface TransferState {
   loaded: number;
   total: number;
 }
+
+interface EditorTarget {
+  entry: SftpEntry;
+  remotePath: string;
+}
+
+const TEXT_EDIT_SIZE_LABEL = "2 MB";
 
 function formatUploadProgress(loaded: number, total: number): string {
   if (total <= 0) return "0%";
@@ -115,6 +129,7 @@ export function FileManagerWidget({
   const [uploadState, setUploadState] = useState<UploadState | null>(null);
   const [downloading, setDownloading] = useState(false);
   const [downloadState, setDownloadState] = useState<TransferState | null>(null);
+  const [editorTarget, setEditorTarget] = useState<EditorTarget | null>(null);
   const dragDepthRef = useRef(0);
 
   const sortedEntries = useMemo(() => sortSftpEntries(entries), [entries]);
@@ -250,7 +265,29 @@ export function FileManagerWidget({
     if (!isActive() || !ready) return;
     if (entry.isDir) {
       navigateTo(joinRemotePath(remotePath, entry.name));
+      return;
     }
+    if (!entry.isLink) {
+      handleEditEntry(entry);
+    }
+  };
+
+  const handleEditEntry = (entry: SftpEntry) => {
+    if (!isActive() || !ready || entry.isDir || entry.isLink) return;
+    if (uploading || downloading || loading) return;
+
+    if (entry.size > MAX_SFTP_TEXT_EDIT_SIZE) {
+      setError(
+        t("fileManager.editTooLarge", { size: TEXT_EDIT_SIZE_LABEL }),
+      );
+      return;
+    }
+
+    setMenu(null);
+    setEditorTarget({
+      entry,
+      remotePath: joinRemotePath(remotePath, entry.name),
+    });
   };
 
   const handleMkdir = async () => {
@@ -495,6 +532,11 @@ export function FileManagerWidget({
         onSelect: () => navigateTo(joinRemotePath(remotePath, entry.name)),
       });
     } else {
+      items.push({
+        id: "edit",
+        label: t("fileManager.edit"),
+        onSelect: () => handleEditEntry(entry),
+      });
       items.push({
         id: "download",
         label: t("fileManager.download"),
@@ -808,6 +850,21 @@ export function FileManagerWidget({
         items={menuItems}
         onClose={() => setMenu(null)}
       />
+
+      {editorTarget && (
+        <Suspense fallback={null}>
+          <FileEditorDialog
+            open={editorTarget !== null}
+            onOpenChange={(open) => {
+              if (!open) setEditorTarget(null);
+            }}
+            client={clientRef.current}
+            remotePath={editorTarget.remotePath}
+            fileName={editorTarget.entry.name}
+            onSaved={() => void loadDirectory(remotePath)}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }

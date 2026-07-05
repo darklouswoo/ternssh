@@ -19,6 +19,7 @@ export type SftpClientStatus =
   | "closed";
 
 export const MAX_SFTP_FILE_SIZE = 500 * 1024 * 1024;
+export const MAX_SFTP_TEXT_EDIT_SIZE = 2 * 1024 * 1024;
 const UPLOAD_CHUNK_SIZE = 32 * 1024;
 
 export interface SftpUploadProgress {
@@ -249,13 +250,56 @@ export class SftpClient {
     onProgress?: (progress: SftpDownloadProgress) => void,
   ): Promise<void> {
     const run = () =>
-      this.withSftpRetry(() => this.downloadFile(remotePath, onProgress));
+      this.withSftpRetry(async () => {
+        const { bytes, filename } = await this.fetchFileBytes(
+          remotePath,
+          onProgress,
+        );
+        triggerBrowserDownload(new Blob([bytes]), filename);
+        onProgress?.({ loaded: bytes.byteLength, total: bytes.byteLength });
+      });
     const result = this.downloadChain.then(run);
     this.downloadChain = result.then(
       () => {},
       () => {},
     );
     return result;
+  }
+
+  async readFileContent(
+    remotePath: string,
+    options?: {
+      maxSize?: number;
+      onProgress?: (progress: SftpDownloadProgress) => void;
+    },
+  ): Promise<Uint8Array> {
+    const run = () =>
+      this.withSftpRetry(async () => {
+        const { bytes } = await this.fetchFileBytes(
+          remotePath,
+          options?.onProgress,
+          options?.maxSize,
+        );
+        return bytes;
+      });
+    const result = this.downloadChain.then(run);
+    this.downloadChain = result.then(
+      () => {},
+      () => {},
+    );
+    return result;
+  }
+
+  async writeFileContent(
+    remotePath: string,
+    content: string,
+    onProgress?: (progress: SftpUploadProgress) => void,
+  ): Promise<void> {
+    const bytes = encodeFileContent(content);
+    const file = new File([bytes], remotePath.split("/").pop() || "file", {
+      type: "text/plain",
+    });
+    return this.upload(remotePath, file, onProgress);
   }
 
   cancelDownload(): void {
@@ -273,10 +317,11 @@ export class SftpClient {
     this.downloadChunks = [];
   }
 
-  private async downloadFile(
+  private async fetchFileBytes(
     remotePath: string,
     onProgress?: (progress: SftpDownloadProgress) => void,
-  ): Promise<void> {
+    maxSize?: number,
+  ): Promise<{ bytes: Uint8Array; filename: string }> {
     await this.ensureSftpReady();
     this.downloadActive = true;
     this.downloadChunks = [];
@@ -300,6 +345,14 @@ export class SftpClient {
         remotePath.split("/").pop() ||
         "download";
       const total = Number(startMessage.size ?? 0);
+
+      if (maxSize !== undefined && total > maxSize) {
+        this.send({ type: "sftp_download_cancel" });
+        throw new Error(
+          `文件过大 (${formatFileSize(total)})，编辑最大支持 ${formatFileSize(maxSize)}`,
+        );
+      }
+
       onProgress?.({ loaded: 0, total });
 
       await new Promise<void>((resolve, reject) => {
@@ -322,8 +375,9 @@ export class SftpClient {
       });
 
       const blob = new Blob(this.downloadChunks);
-      triggerBrowserDownload(blob, filename);
-      onProgress?.({ loaded: blob.size, total: total || blob.size });
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      onProgress?.({ loaded: bytes.byteLength, total: total || bytes.byteLength });
+      return { bytes, filename };
     } finally {
       this.downloadActive = false;
       this.downloadWaiter = null;
@@ -697,6 +751,30 @@ export async function collectDroppedFiles(
     results.push({ file, relativePath: file.name });
   }
   return results;
+}
+
+export function decodeFileContent(bytes: Uint8Array): string {
+  if (
+    bytes.length >= 3 &&
+    bytes[0] === 0xef &&
+    bytes[1] === 0xbb &&
+    bytes[2] === 0xbf
+  ) {
+    return new TextDecoder("utf-8").decode(bytes.subarray(3));
+  }
+  return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+}
+
+export function encodeFileContent(text: string): Uint8Array {
+  return new TextEncoder().encode(text);
+}
+
+export function isLikelyBinaryContent(bytes: Uint8Array): boolean {
+  const sample = bytes.subarray(0, Math.min(bytes.length, 8192));
+  for (const byte of sample) {
+    if (byte === 0) return true;
+  }
+  return false;
 }
 
 function formatFileSize(bytes: number): string {
