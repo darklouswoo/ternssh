@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type MouseEvent } from "react";
 import {
   ArrowUp,
+  Download,
   File,
   Folder,
   FolderPlus,
+  FolderUp,
   Home,
   Link2,
   RefreshCw,
@@ -17,6 +19,7 @@ import { useT } from "@/i18n";
 import { isSessionAlive, type ServerSession } from "@/lib/sessions";
 import {
   collectDroppedFiles,
+  collectFileInputItems,
   joinRemotePath,
   isRemoteRoot,
   parentRemotePath,
@@ -38,6 +41,12 @@ interface MenuState {
 }
 
 interface UploadState {
+  name: string;
+  loaded: number;
+  total: number;
+}
+
+interface TransferState {
   name: string;
   loaded: number;
   total: number;
@@ -84,6 +93,7 @@ export function FileManagerWidget({
   const session = activeServerId ? sessions[activeServerId] : null;
   const clientRef = useRef<SftpClient | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const folderInputRef = useRef<HTMLInputElement | null>(null);
   const mountedRef = useRef(true);
   const createdDirsRef = useRef<Set<string>>(new Set());
   const [remotePath, setRemotePath] = useState(".");
@@ -97,9 +107,17 @@ export function FileManagerWidget({
   const [dragActive, setDragActive] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadState, setUploadState] = useState<UploadState | null>(null);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadState, setDownloadState] = useState<TransferState | null>(null);
   const dragDepthRef = useRef(0);
 
   const sortedEntries = useMemo(() => sortSftpEntries(entries), [entries]);
+  const selectedEntry = useMemo(
+    () => entries.find((item) => item.name === selectedName) ?? null,
+    [entries, selectedName],
+  );
+  const canDownloadSelected =
+    selectedEntry !== null && !selectedEntry.isDir && !downloading && !uploading;
 
   const disconnectClient = useCallback(() => {
     clientRef.current?.disconnect();
@@ -282,6 +300,41 @@ export function FileManagerWidget({
     await handleDeleteEntry(entry);
   };
 
+  const handleDownloadEntry = async (entry: SftpEntry) => {
+    if (!isActive() || !ready || !clientRef.current || entry.isDir) return;
+
+    const target = joinRemotePath(remotePath, entry.name);
+    const client = clientRef.current;
+    setDownloading(true);
+    setError(null);
+    setMenu(null);
+    setDownloadState({ name: entry.name, loaded: 0, total: entry.size });
+
+    try {
+      await client.download(target, (progress) => {
+        if (!isActive()) return;
+        setDownloadState({
+          name: entry.name,
+          loaded: progress.loaded,
+          total: progress.total,
+        });
+      });
+    } catch (err) {
+      if (!isActive()) return;
+      setError(err instanceof Error ? err.message : t("fileManager.downloadFailed"));
+    } finally {
+      if (isActive()) {
+        setDownloading(false);
+        setDownloadState(null);
+      }
+    }
+  };
+
+  const handleDownload = async () => {
+    if (!selectedEntry || selectedEntry.isDir) return;
+    await handleDownloadEntry(selectedEntry);
+  };
+
   const uploadLocalItems = useCallback(
     async (items: { file: File; relativePath: string }[]) => {
       if (!isActive() || !ready || !clientRef.current || items.length === 0) {
@@ -341,7 +394,7 @@ export function FileManagerWidget({
       event.preventDefault();
       dragDepthRef.current = 0;
       setDragActive(false);
-      if (!ready || uploading || loading) return;
+      if (!ready || uploading || downloading || loading) return;
 
       const items = await collectDroppedFiles(event.dataTransfer);
       if (items.length === 0) return;
@@ -355,10 +408,19 @@ export function FileManagerWidget({
       const fileList = event.target.files;
       if (!fileList || fileList.length === 0) return;
 
-      const items = Array.from(fileList).map((file) => ({
-        file,
-        relativePath: file.name,
-      }));
+      const items = collectFileInputItems(fileList);
+      event.target.value = "";
+      await uploadLocalItems(items);
+    },
+    [uploadLocalItems],
+  );
+
+  const handleFolderInputChange = useCallback(
+    async (event: ChangeEvent<HTMLInputElement>) => {
+      const fileList = event.target.files;
+      if (!fileList || fileList.length === 0) return;
+
+      const items = collectFileInputItems(fileList);
       event.target.value = "";
       await uploadLocalItems(items);
     },
@@ -387,6 +449,11 @@ export function FileManagerWidget({
           id: "upload",
           label: t("fileManager.upload"),
           onSelect: () => fileInputRef.current?.click(),
+        },
+        {
+          id: "uploadFolder",
+          label: t("fileManager.uploadFolder"),
+          onSelect: () => folderInputRef.current?.click(),
         },
         {
           id: "mkdir",
@@ -420,6 +487,12 @@ export function FileManagerWidget({
         id: "open",
         label: t("common.open"),
         onSelect: () => navigateTo(joinRemotePath(remotePath, entry.name)),
+      });
+    } else {
+      items.push({
+        id: "download",
+        label: t("fileManager.download"),
+        onSelect: () => void handleDownloadEntry(entry),
       });
     }
 
@@ -455,13 +528,13 @@ export function FileManagerWidget({
       className="relative flex h-full min-h-0 flex-col"
       onDragEnter={(event) => {
         event.preventDefault();
-        if (!ready || uploading || loading) return;
+        if (!ready || uploading || downloading || loading) return;
         dragDepthRef.current += 1;
         setDragActive(true);
       }}
       onDragOver={(event) => {
         event.preventDefault();
-        if (!ready || uploading || loading) return;
+        if (!ready || uploading || downloading || loading) return;
         event.dataTransfer.dropEffect = "copy";
         setDragActive(true);
       }}
@@ -480,6 +553,14 @@ export function FileManagerWidget({
         multiple
         className="hidden"
         onChange={(event) => void handleFileInputChange(event)}
+      />
+      <input
+        ref={folderInputRef}
+        type="file"
+        multiple
+        className="hidden"
+        {...({ webkitdirectory: "", directory: "" } as object)}
+        onChange={(event) => void handleFolderInputChange(event)}
       />
       <div className="flex flex-wrap items-center gap-1 border-b border-[var(--color-border)] p-2">
         <Button
@@ -517,6 +598,24 @@ export function FileManagerWidget({
           title={t("fileManager.upload")}
         >
           <Upload className="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          size="sm"
+          variant="secondary"
+          disabled={loading || !ready || uploading}
+          onClick={() => folderInputRef.current?.click()}
+          title={t("fileManager.uploadFolder")}
+        >
+          <FolderUp className="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          size="sm"
+          variant="secondary"
+          disabled={loading || !ready || !canDownloadSelected}
+          onClick={() => void handleDownload()}
+          title={t("fileManager.download")}
+        >
+          <Download className="h-3.5 w-3.5" />
         </Button>
         <Button
           size="sm"
@@ -573,6 +672,27 @@ export function FileManagerWidget({
               className="h-full bg-[var(--color-primary)] transition-all"
               style={{
                 width: `${uploadState.total > 0 ? Math.min(100, (uploadState.loaded / uploadState.total) * 100) : 0}%`,
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {downloadState && (
+        <div className="border-b border-[var(--color-border)] px-3 py-2">
+          <div className="flex items-center justify-between gap-2 text-[11px]">
+            <span className="truncate">
+              {t("fileManager.downloading", { name: downloadState.name })}
+            </span>
+            <span className="shrink-0 text-[var(--color-muted-foreground)]">
+              {formatUploadProgress(downloadState.loaded, downloadState.total)}
+            </span>
+          </div>
+          <div className="mt-1 h-1.5 bg-[var(--color-secondary)]">
+            <div
+              className="h-full bg-sky-400 transition-all"
+              style={{
+                width: `${downloadState.total > 0 ? Math.min(100, (downloadState.loaded / downloadState.total) * 100) : 0}%`,
               }}
             />
           </div>
@@ -658,14 +778,16 @@ export function FileManagerWidget({
         {ready
           ? uploading
             ? t("fileManager.uploadingStatus", { path: remotePath })
-            : t("fileManager.status", {
-                path: remotePath,
-                count: sortedEntries.length,
-              })
+            : downloading
+              ? t("fileManager.downloadingStatus", { path: remotePath })
+              : t("fileManager.status", {
+                  path: remotePath,
+                  count: sortedEntries.length,
+                })
           : t("fileManager.connecting")}
       </div>
 
-      {dragActive && ready && !uploading && (
+      {dragActive && ready && !uploading && !downloading && (
         <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center border-2 border-dashed border-[var(--color-primary)] bg-[var(--color-background)]/80">
           <div className="rounded-sm bg-[var(--color-card)] px-4 py-3 text-sm shadow-lg">
             {t("fileManager.dropToUpload", { path: remotePath })}

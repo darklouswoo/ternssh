@@ -733,21 +733,97 @@ export class SFTPHandler {
     }
 
     try {
-      const resp = await this.sftp.removeFile(path);
-      const type = resp[0];
+      const statResp = await this.sftp.stat(path);
+      const statType = statResp[0];
 
-      if (type === SSH_FXP_STATUS) {
-        const status = this.sftp.parseStatusResponse(resp);
-        if (status.code !== SSH_FX_OK) {
-          this.sendError('delete', status.message);
-          return;
-        }
+      if (statType === SSH_FXP_STATUS) {
+        const status = this.sftp.parseStatusResponse(statResp);
+        this.sendError('delete', status.message);
+        return;
+      }
+
+      if (statType !== SSH_FXP_ATTRS) {
+        this.sendError('delete', '无法识别路径类型');
+        return;
+      }
+
+      const attrs = this.sftp.parseAttrsResponse(statResp);
+      const fileType =
+        attrs.permissions !== undefined
+          ? getFileTypeFromPermissions(attrs.permissions)
+          : 'file';
+
+      if (fileType === 'dir') {
+        await this.deleteDirectoryRecursive(path);
+      } else {
+        await this.removeFileAtPath(path);
       }
 
       this.sendJSON({ type: 'sftp_delete_result', path, success: true });
     } catch (e) {
-      this.sendError('delete', '删除失败: ' + (e instanceof Error ? e.message : String(e)));
+      this.sendError(
+        'delete',
+        '删除失败: ' + (e instanceof Error ? e.message : String(e)),
+      );
     }
+  }
+
+  private joinRemotePath(base: string, name: string): string {
+    if (base === '.' || base === '') return name;
+    if (base.endsWith('/')) return `${base}${name}`;
+    return `${base}/${name}`;
+  }
+
+  private ensureStatusOk(resp: Uint8Array, action: string): void {
+    if (resp[0] !== SSH_FXP_STATUS) return;
+    const status = this.sftp.parseStatusResponse(resp);
+    if (status.code !== SSH_FX_OK) {
+      throw new Error(status.message || `${action}失败`);
+    }
+  }
+
+  private async removeFileAtPath(path: string): Promise<void> {
+    const resp = await this.sftp.removeFile(path);
+    this.ensureStatusOk(resp, '删除文件');
+  }
+
+  private async deleteDirectoryRecursive(path: string): Promise<void> {
+    const openResp = await this.sftp.openDir(path);
+    const openType = openResp[0];
+
+    if (openType === SSH_FXP_STATUS) {
+      const status = this.sftp.parseStatusResponse(openResp);
+      throw new Error(status.message || '打开目录失败');
+    }
+
+    if (openType !== SSH_FXP_HANDLE) {
+      throw new Error('打开目录失败');
+    }
+
+    const handle = this.sftp.parseHandleResponse(openResp);
+    try {
+      const entries = await this.sftp.listAllEntries(handle);
+      for (const entry of entries) {
+        if (entry.filename === '.' || entry.filename === '..') continue;
+
+        const childPath = this.joinRemotePath(path, entry.filename);
+        const childType =
+          entry.attrs.permissions !== undefined
+            ? getFileTypeFromPermissions(entry.attrs.permissions)
+            : 'file';
+
+        if (childType === 'dir') {
+          await this.deleteDirectoryRecursive(childPath);
+        } else {
+          await this.removeFileAtPath(childPath);
+        }
+      }
+    } finally {
+      await this.sftp.closeHandle(handle).catch(() => {});
+    }
+
+    const rmdirResp = await this.sftp.rmdir(path);
+    this.ensureStatusOk(rmdirResp, '删除目录');
   }
 
   // Rename

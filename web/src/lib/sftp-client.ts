@@ -26,6 +26,8 @@ export interface SftpUploadProgress {
   total: number;
 }
 
+export type SftpDownloadProgress = SftpUploadProgress;
+
 interface Waiter {
   match: (message: Record<string, unknown>) => boolean;
   resolve: (message: Record<string, unknown>) => void;
@@ -46,7 +48,18 @@ export class SftpClient {
   private sftpReady = false;
   private uploadProgressHandler: ((progress: SftpUploadProgress) => void) | null =
     null;
+  private downloadProgressHandler:
+    | ((progress: SftpDownloadProgress) => void)
+    | null = null;
   private uploadChain: Promise<void> = Promise.resolve();
+  private downloadChain: Promise<void> = Promise.resolve();
+  private downloadActive = false;
+  private downloadChunks: Uint8Array[] = [];
+  private downloadWaiter: {
+    resolve: () => void;
+    reject: (error: Error) => void;
+    filename: string;
+  } | null = null;
 
   get connected(): boolean {
     return this.ws?.readyState === WebSocket.OPEN;
@@ -231,6 +244,94 @@ export class SftpClient {
     this.uploadProgressHandler = null;
   }
 
+  async download(
+    remotePath: string,
+    onProgress?: (progress: SftpDownloadProgress) => void,
+  ): Promise<void> {
+    const run = () =>
+      this.withSftpRetry(() => this.downloadFile(remotePath, onProgress));
+    const result = this.downloadChain.then(run);
+    this.downloadChain = result.then(
+      () => {},
+      () => {},
+    );
+    return result;
+  }
+
+  cancelDownload(): void {
+    try {
+      this.send({ type: "sftp_download_cancel" });
+    } catch {
+      // ignore
+    }
+    this.downloadProgressHandler = null;
+    if (this.downloadWaiter) {
+      this.downloadWaiter.reject(new Error("下载已取消"));
+      this.downloadWaiter = null;
+    }
+    this.downloadActive = false;
+    this.downloadChunks = [];
+  }
+
+  private async downloadFile(
+    remotePath: string,
+    onProgress?: (progress: SftpDownloadProgress) => void,
+  ): Promise<void> {
+    await this.ensureSftpReady();
+    this.downloadActive = true;
+    this.downloadChunks = [];
+    this.downloadProgressHandler = onProgress ?? null;
+
+    try {
+      this.send({ type: "sftp_download", path: remotePath });
+
+      const startMessage = await this.waitFor(
+        (item) =>
+          item.type === "sftp_download_start" || item.type === "sftp_error",
+        30_000,
+        "下载初始化超时",
+      );
+      if (startMessage.type === "sftp_error") {
+        throw new Error(String(startMessage.message ?? "下载初始化失败"));
+      }
+
+      const filename =
+        String(startMessage.filename ?? "") ||
+        remotePath.split("/").pop() ||
+        "download";
+      const total = Number(startMessage.size ?? 0);
+      onProgress?.({ loaded: 0, total });
+
+      await new Promise<void>((resolve, reject) => {
+        const timer = window.setTimeout(() => {
+          this.downloadWaiter = null;
+          reject(new Error("下载超时"));
+        }, 30 * 60 * 1000);
+
+        this.downloadWaiter = {
+          filename,
+          resolve: () => {
+            window.clearTimeout(timer);
+            resolve();
+          },
+          reject: (error) => {
+            window.clearTimeout(timer);
+            reject(error);
+          },
+        };
+      });
+
+      const blob = new Blob(this.downloadChunks);
+      triggerBrowserDownload(blob, filename);
+      onProgress?.({ loaded: blob.size, total: total || blob.size });
+    } finally {
+      this.downloadActive = false;
+      this.downloadWaiter = null;
+      this.downloadChunks = [];
+      this.downloadProgressHandler = null;
+    }
+  }
+
   private async uploadFile(
     remotePath: string,
     file: File,
@@ -309,6 +410,7 @@ export class SftpClient {
   }
 
   disconnect(): void {
+    this.cancelDownload();
     this.intentionalClose = true;
     this.closed = true;
     this.sftpReady = false;
@@ -341,7 +443,14 @@ export class SftpClient {
   }
 
   private async handleMessage(data: string | Blob | ArrayBuffer): Promise<void> {
-    if (typeof data !== "string") return;
+    if (typeof data !== "string") {
+      const buffer =
+        data instanceof ArrayBuffer ? data : await data.arrayBuffer();
+      if (this.downloadActive && buffer.byteLength > 0) {
+        this.downloadChunks.push(new Uint8Array(buffer));
+      }
+      return;
+    }
 
     let message: Record<string, unknown>;
     try {
@@ -361,6 +470,32 @@ export class SftpClient {
       return;
     }
 
+    if (type === "sftp_download_progress") {
+      this.downloadProgressHandler?.({
+        loaded: Number(message.loaded ?? 0),
+        total: Number(message.total ?? 0),
+      });
+      return;
+    }
+
+    if (type === "sftp_download_done") {
+      if (this.downloadWaiter) {
+        const waiter = this.downloadWaiter;
+        this.downloadWaiter = null;
+        waiter.resolve();
+      }
+      return;
+    }
+
+    if (type === "sftp_download_cancelled") {
+      if (this.downloadWaiter) {
+        const waiter = this.downloadWaiter;
+        this.downloadWaiter = null;
+        waiter.reject(new Error("下载已取消"));
+      }
+      return;
+    }
+
     if (type === "sftp_reset") {
       this.sftpReady = false;
       return;
@@ -375,6 +510,15 @@ export class SftpClient {
     }
 
     if (type === "sftp_error") {
+      if (this.downloadWaiter) {
+        const waiter = this.downloadWaiter;
+        this.downloadWaiter = null;
+        waiter.reject(
+          new Error(String(message.message ?? "SFTP 下载失败")),
+        );
+        return;
+      }
+
       const waiter = this.waiters.find((item) => item.match(message));
       if (waiter) {
         this.removeWaiter(waiter);
@@ -471,6 +615,16 @@ export interface LocalDropItem {
   relativePath: string;
 }
 
+export function collectFileInputItems(fileList: FileList): LocalDropItem[] {
+  const results: LocalDropItem[] = [];
+  for (let i = 0; i < fileList.length; i++) {
+    const file = fileList[i]!;
+    const relativePath = file.webkitRelativePath || file.name;
+    results.push({ file, relativePath });
+  }
+  return results;
+}
+
 export async function collectDroppedFiles(
   dataTransfer: DataTransfer,
 ): Promise<LocalDropItem[]> {
@@ -554,4 +708,16 @@ function formatFileSize(bytes: number): string {
     unitIndex += 1;
   }
   return `${value >= 10 || unitIndex === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unitIndex]}`;
+}
+
+function triggerBrowserDownload(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.style.display = "none";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
