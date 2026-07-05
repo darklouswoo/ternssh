@@ -348,14 +348,14 @@ CREATE INDEX idx_sessions_user_id ON sessions(user_id);
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/HaradaKashiwa/ternssh)
 
-点击按钮会克隆仓库、构建 `web/` 静态前端到 `server/public/`，并部署 Workers（含 D1、Durable Objects 与静态资源）。`/api/*` 由 Worker 处理，其余路由回退到 SPA。
+点击按钮会读取仓库根目录的 `wrangler.jsonc`，自动构建 `web/`、迁移 D1，并部署 Workers（含 Durable Objects 与静态资源）。`/api/*` 由 Worker 处理，其余路由回退到 SPA。
 
 ### 手动部署
 
 ```bash
 npm install
-npm run deploy          # 构建 web → server/public，再 wrangler deploy
-npm run db:migrate --prefix server   # 首次或 schema 变更后
+npm run deploy          # 构建 web → server/public，迁移 D1，wrangler deploy
+npm run db:migrate      # 仅执行 D1 迁移（deploy 已包含远程迁移）
 ```
 
 | 组件 | 平台 | 说明 |
@@ -382,20 +382,24 @@ npm run dev:server
 
 **Access 模式**：在 Zero Trust 中为应用域名创建 Self-hosted Application，设置 `ACCESS_ENABLED=true` 并配置 `ACCESS_TEAM_DOMAIN` 与 `ACCESS_AUD`（Application AUD tag）。
 
-`wrangler.jsonc` 中需绑定 D1、Durable Objects、静态资源与 Secrets：
+`wrangler.jsonc` 位于仓库根目录，需绑定 D1、Durable Objects、静态资源与 Secrets：
 
 ```jsonc
 {
   "name": "ternssh-api",
-  "main": "src/index.ts",
-  "compatibility_date": "2024-11-01",
+  "main": "server/src/index.ts",
   "assets": {
-    "directory": "./public",
+    "directory": "./server/public",
     "not_found_handling": "single-page-application",
     "run_worker_first": ["/api/*"]
   },
   "d1_databases": [
-    { "binding": "DB", "database_name": "ternssh", "database_id": "<id>" }
+    {
+      "binding": "DB",
+      "database_name": "ternssh",
+      "database_id": "<id>",
+      "migrations_dir": "server/migrations"
+    }
   ],
   "durable_objects": {
     "bindings": [{ "name": "SSH_SESSION", "class_name": "SshSession" }]

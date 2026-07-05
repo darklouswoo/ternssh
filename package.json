@@ -4,11 +4,23 @@
   "license": "GPL-3.0-or-later",
   "scripts": {
     "postinstall": "npm install --prefix web && npm install --prefix server",
-    "dev:server": "npm run dev --prefix server",
+    "dev:server": "wrangler dev",
     "dev:web": "npm run dev --prefix web",
     "build": "npm run build --prefix web",
-    "deploy": "npm run deploy --prefix server",
-    "db:migrate:local": "npm run db:migrate:local --prefix server",
+    "deploy": "npm run build && wrangler d1 migrations apply ternssh --remote && wrangler deploy",
+    "db:migrate": "wrangler d1 migrations apply ternssh --remote",
+    "db:migrate:local": "wrangler d1 migrations apply ternssh --local",
+    "types": "wrangler types --config wrangler.jsonc --env-interface Env server/worker-configuration.d.ts",
     "build:web": "npm run build --prefix web"
+  },
+  "cloudflare": {
+    "bindings": {
+      "ACCESS_ENABLED": {
+        "description": "Set to `true` to enable Cloudflare Access. Leave as `false` for open mode."
+      }
+    }
+  },
+  "devDependencies": {
+    "wrangler": "^4.24.3"
   }
 }
