@@ -5,6 +5,7 @@ import { SshSession } from "./do/ssh-session";
 import { dashboardRoutes } from "./routes/dashboards";
 import { meRoutes } from "./routes/me";
 import { savedPasswordRoutes } from "./routes/saved-passwords";
+import { savedPrivateKeyRoutes } from "./routes/saved-private-keys";
 import { serverRoutes } from "./routes/servers";
 import { sessionRoutes } from "./routes/sessions";
 import type { Variables } from "./types";
@@ -42,6 +43,7 @@ const v1 = new Hono<{ Bindings: Env; Variables: Variables }>();
 v1.route("/me", meRoutes);
 v1.route("/servers", serverRoutes);
 v1.route("/saved-passwords", savedPasswordRoutes);
+v1.route("/saved-private-keys", savedPrivateKeyRoutes);
 v1.route("/dashboards", dashboardRoutes);
 v1.route("/sessions", sessionRoutes);
 

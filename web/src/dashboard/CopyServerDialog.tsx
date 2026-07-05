@@ -72,7 +72,7 @@ export function CopyServerDialog({
         ...(trimmedCredential ? { credential: trimmedCredential } : {}),
       });
       if (authType === "private_key" && trimmedCredential) {
-        maybeSavePrivateKey(keyName, trimmedCredential, saveKey);
+        await maybeSavePrivateKey(keyName, trimmedCredential, saveKey);
       } else if (authType === "password" && trimmedCredential) {
         await maybeSavePassword(passwordName, trimmedCredential, savePassword);
       }

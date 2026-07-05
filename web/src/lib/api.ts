@@ -110,6 +110,14 @@ export interface SavedPasswordRecord {
   updated_at: string;
 }
 
+export interface SavedPrivateKeyRecord {
+  id: string;
+  name: string;
+  value: string;
+  created_at: string;
+  updated_at: string;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
@@ -183,6 +191,17 @@ export const api = {
     }),
   deleteSavedPassword: (id: string) =>
     request<{ ok: boolean }>(`/api/v1/saved-passwords/${id}`, {
+      method: "DELETE",
+    }),
+  listSavedPrivateKeys: () =>
+    request<{ keys: SavedPrivateKeyRecord[] }>("/api/v1/saved-private-keys"),
+  savePrivateKey: (input: { name: string; value: string }) =>
+    request<{ key: SavedPrivateKeyRecord }>("/api/v1/saved-private-keys", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  deleteSavedPrivateKey: (id: string) =>
+    request<{ ok: boolean }>(`/api/v1/saved-private-keys/${id}`, {
       method: "DELETE",
     }),
   getDashboard: () => request<Dashboard>("/api/v1/dashboards"),

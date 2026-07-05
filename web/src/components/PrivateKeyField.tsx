@@ -1,4 +1,4 @@
-import { useRef, useState, type DragEvent } from "react";
+import { useEffect, useRef, useState, type DragEvent } from "react";
 import { Trash2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -40,17 +40,30 @@ export function PrivateKeyField({
 }: PrivateKeyFieldProps) {
   const t = useT();
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [savedKeys, setSavedKeys] = useState<SavedPrivateKey[]>(() =>
-    listSavedPrivateKeys(),
-  );
+  const [savedKeys, setSavedKeys] = useState<SavedPrivateKey[]>([]);
   const [selectedKeyId, setSelectedKeyId] = useState("");
+  const [loading, setLoading] = useState(true);
   const [uploadFileName, setUploadFileName] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
 
-  const refreshSavedKeys = () => {
-    setSavedKeys(listSavedPrivateKeys());
-  };
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    void listSavedPrivateKeys()
+      .then((keys) => {
+        if (!cancelled) setSavedKeys(keys);
+      })
+      .catch(() => {
+        if (!cancelled) setSavedKeys([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const applyUploadedFile = async (file: File) => {
     setUploadError(null);
@@ -107,16 +120,19 @@ export function PrivateKeyField({
   };
 
   const handleDeleteSavedKey = (keyId: string) => {
-    deleteSavedPrivateKey(keyId);
-    refreshSavedKeys();
-    if (selectedKeyId === keyId) {
-      setSelectedKeyId("");
-    }
+    void deleteSavedPrivateKey(keyId)
+      .then(() => {
+        setSavedKeys((current) => current.filter((item) => item.id !== keyId));
+        if (selectedKeyId === keyId) {
+          setSelectedKeyId("");
+        }
+      })
+      .catch(() => {});
   };
 
   return (
     <div className="grid gap-2">
-      {savedKeys.length > 0 && (
+      {!loading && savedKeys.length > 0 && (
         <div className="grid gap-2">
           <Label htmlFor={`${id}-saved`}>{t("privateKey.savedKeys")}</Label>
           <div className="flex gap-2">

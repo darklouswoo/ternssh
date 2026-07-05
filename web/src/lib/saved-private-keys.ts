@@ -1,67 +1,44 @@
+import { api, type SavedPrivateKeyRecord } from "@/lib/api";
+
 export interface SavedPrivateKey {
   id: string;
   name: string;
   content: string;
 }
 
-const STORAGE_KEY = "ternssh-saved-private-keys";
-
-function readAll(): SavedPrivateKey[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as SavedPrivateKey[];
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (item) =>
-        typeof item.id === "string" &&
-        typeof item.name === "string" &&
-        typeof item.content === "string",
-    );
-  } catch {
-    return [];
-  }
-}
-
-function writeAll(keys: SavedPrivateKey[]): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(keys));
-}
-
-export function listSavedPrivateKeys(): SavedPrivateKey[] {
-  return readAll();
-}
-
-export function savePrivateKey(name: string, content: string): SavedPrivateKey {
-  const trimmedName = name.trim() || "Private key";
-  const trimmedContent = content.trim();
-  const existing = readAll();
-  const duplicate = existing.find((item) => item.content === trimmedContent);
-  if (duplicate) {
-    const updated = existing.map((item) =>
-      item.id === duplicate.id ? { ...item, name: trimmedName } : item,
-    );
-    writeAll(updated);
-    return { ...duplicate, name: trimmedName };
-  }
-
-  const entry: SavedPrivateKey = {
-    id: crypto.randomUUID(),
-    name: trimmedName,
-    content: trimmedContent,
+function fromRecord(record: SavedPrivateKeyRecord): SavedPrivateKey {
+  return {
+    id: record.id,
+    name: record.name,
+    content: record.value,
   };
-  writeAll([entry, ...existing]);
-  return entry;
 }
 
-export function deleteSavedPrivateKey(id: string): void {
-  writeAll(readAll().filter((item) => item.id !== id));
+export async function listSavedPrivateKeys(): Promise<SavedPrivateKey[]> {
+  const { keys } = await api.listSavedPrivateKeys();
+  return keys.map(fromRecord);
 }
 
-export function maybeSavePrivateKey(
+export async function savePrivateKey(
+  name: string,
+  content: string,
+): Promise<SavedPrivateKey> {
+  const { key } = await api.savePrivateKey({
+    name,
+    value: content,
+  });
+  return fromRecord(key);
+}
+
+export async function deleteSavedPrivateKey(id: string): Promise<void> {
+  await api.deleteSavedPrivateKey(id);
+}
+
+export async function maybeSavePrivateKey(
   name: string,
   content: string,
   shouldSave: boolean,
-): void {
+): Promise<void> {
   if (!shouldSave || !content.trim()) return;
-  savePrivateKey(name, content);
+  await savePrivateKey(name, content);
 }

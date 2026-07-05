@@ -71,7 +71,7 @@ export function AddServerDialog({
         group_id: groupId,
       });
       if (authType === "private_key") {
-        maybeSavePrivateKey(keyName, trimmedCredential, saveKey);
+        await maybeSavePrivateKey(keyName, trimmedCredential, saveKey);
       } else {
         await maybeSavePassword(passwordName, trimmedCredential, savePassword);
       }
