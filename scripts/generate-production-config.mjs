@@ -111,16 +111,17 @@ function resolveProductionIds() {
     };
   }
 
+  if (shouldResolveProduction()) {
+    const discovered = discoverD1FromCloudflare(readDatabaseName());
+    if (discovered) return discovered;
+  }
+
   if (fs.existsSync(productionPath)) {
     const fromFile = readIdsFromFile(productionPath);
     if (fromFile) {
       console.log("Using wrangler.production.jsonc.");
       return fromFile;
     }
-  }
-
-  if (shouldResolveProduction()) {
-    return discoverD1FromCloudflare(readDatabaseName());
   }
 
   return null;
@@ -142,10 +143,20 @@ function writeProductionFile(ids) {
 function patchWranglerJsonc(ids) {
   let content = fs.readFileSync(basePath, "utf8");
 
-  content = content.replace(
+  if (!/"d1_databases"\s*:/.test(content)) {
+    throw new Error("wrangler.jsonc is missing d1_databases configuration.");
+  }
+
+  const updated = content.replace(
     /"database_id"\s*:\s*"[^"]*"/,
     `"database_id": "${ids.d1}"`,
   );
+
+  if (updated === content) {
+    throw new Error("Failed to update database_id in wrangler.jsonc.");
+  }
+
+  content = updated;
 
   if (ids.account) {
     if (/^\s*"account_id"/m.test(content)) {
@@ -203,4 +214,5 @@ if (!ids) {
 
 writeProductionFile(ids);
 patchWranglerJsonc(ids);
+console.log(`Wrote ${path.relative(root, productionPath)}`);
 console.log(`Applied production D1 binding (${ids.d1}) to wrangler.jsonc for deploy.`);

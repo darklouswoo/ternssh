@@ -133,6 +133,8 @@ Recommended build / deploy commands:
 
 The deploy script auto-discovers a remote D1 database named `ternssh` on the connected account (same name as the dashboard binding). Set `D1_DATABASE_ID` to override.
 
+> If `wrangler.production.jsonc` was accidentally committed, remove it from the repo (local only; listed in `.gitignore`).
+
 ```bash
 npm run deploy
 # build frontend → generate wrangler.production.jsonc → remote D1 migrate → wrangler deploy

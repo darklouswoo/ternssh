@@ -133,6 +133,8 @@ npm run deploy
 
 Deploy 脚本会自动查找账号下名为 `ternssh` 的 D1 数据库（与控制台绑定同名即可），也可手动设置 `D1_DATABASE_ID` 覆盖。
 
+> 若仓库中误提交了 `wrangler.production.jsonc`，请删除它（应仅保留在本地，已在 `.gitignore` 中）。
+
 ```bash
 npm run deploy
 # 等价于：构建前端 → 生成 wrangler.production.jsonc → 远程 D1 迁移 → wrangler deploy
