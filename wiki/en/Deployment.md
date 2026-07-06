@@ -6,7 +6,7 @@
 
 ### Cloudflare Workers
 
-<a href="https://deploy.workers.cloudflare.com/?url=https://github.com/HaradaKashiwa/ternssh">
+<a href="https://deploy.workers.cloudflare.com/?url=https://github.com/haradakashiwa/ternssh-cloudflare-workers-template">
   <img src="https://deploy.workers.cloudflare.com/button" alt="Deploy to Cloudflare" />
 </a>
 
