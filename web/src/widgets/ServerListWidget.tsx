@@ -25,6 +25,7 @@ import {
   flattenTree,
   isGroupDescendant,
   readDragItem,
+  resolveMoveIndex,
   writeDragItem,
   type DragItem,
   type DropIntent,
@@ -268,9 +269,10 @@ export function ServerListWidget({
   };
 
   const handleDragStart = (
-    event: DragEvent<HTMLButtonElement>,
+    event: DragEvent<HTMLSpanElement>,
     item: DragItem,
   ) => {
+    event.stopPropagation();
     writeDragItem(event.dataTransfer, item);
     setDragItem(item);
   };
@@ -307,7 +309,12 @@ export function ServerListWidget({
         type: item.type,
         id: item.id,
         parentId: intent.groupId,
-        index: countGroupChildren(tree, intent.groupId),
+        index: resolveMoveIndex(
+          tree,
+          item,
+          intent.groupId,
+          countGroupChildren(tree, intent.groupId),
+        ),
       });
       setExpanded((current) => new Set(current).add(intent.groupId));
       return;
@@ -317,7 +324,7 @@ export function ServerListWidget({
       type: item.type,
       id: item.id,
       parentId: intent.parentId,
-      index: intent.index,
+      index: resolveMoveIndex(tree, item, intent.parentId, intent.index),
     });
   };
 
@@ -457,7 +464,7 @@ export function ServerListWidget({
               <div key={`${node.type}:${node.id}`}>
                 <div
                   className={cn(
-                    "relative h-0.5 transition-colors",
+                    "relative -my-0.5 h-2 transition-colors",
                     showBeforeDrop && "bg-[var(--color-primary)]",
                   )}
                   onDragOver={
@@ -525,15 +532,16 @@ export function ServerListWidget({
                         : undefined
                   }
                 >
-                  <button
-                    type="button"
+                  <span
+                    role="button"
                     className={cn(
-                      "widget-no-drag inline-flex h-6 w-5 shrink-0 items-center justify-center text-[var(--color-muted-foreground)]",
+                      "widget-no-drag server-list-drag-handle inline-flex h-6 w-5 shrink-0 items-center justify-center text-[var(--color-muted-foreground)]",
                       isSearching
                         ? "invisible"
                         : "cursor-grab opacity-0 transition-opacity group-hover:opacity-100 active:cursor-grabbing",
                     )}
                     draggable={!isSearching}
+                    onPointerDown={(event) => event.stopPropagation()}
                     onDragStart={(event) =>
                       handleDragStart(event, {
                         type: isGroup ? "group" : "server",
@@ -545,8 +553,8 @@ export function ServerListWidget({
                     aria-hidden={isSearching}
                     tabIndex={isSearching ? -1 : 0}
                   >
-                    <GripVertical className="h-3.5 w-3.5" />
-                  </button>
+                    <GripVertical className="h-3.5 w-3.5 pointer-events-none" />
+                  </span>
 
                   {isGroup ? (
                     <button

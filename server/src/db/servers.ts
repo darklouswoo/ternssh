@@ -427,9 +427,12 @@ export async function moveTreeItem(
     index: number;
   },
 ): Promise<void> {
+  let previousParentId: string | null;
+
   if (input.type === "group") {
     const group = await getGroup(db, userId, input.id);
     if (!group) throw new Error("group not found");
+    previousParentId = group.parent_id;
 
     if (input.parentId) {
       if (input.parentId === input.id) {
@@ -450,13 +453,14 @@ export async function moveTreeItem(
       .bind(input.parentId, input.id, userId)
       .run();
   } else {
+    const server = await getServer(db, userId, input.id);
+    if (!server) throw new Error("server not found");
+    previousParentId = server.group_id;
+
     if (input.parentId) {
       const group = await getGroup(db, userId, input.parentId);
       if (!group) throw new Error("group not found");
     }
-
-    const server = await getServer(db, userId, input.id);
-    if (!server) throw new Error("server not found");
 
     await db
       .prepare(
@@ -467,7 +471,15 @@ export async function moveTreeItem(
       .run();
   }
 
-  await reorderSiblings(db, userId, input.parentId, input.type, input.id, input.index);
+  await reorderSiblings(
+    db,
+    userId,
+    input.parentId,
+    input.type,
+    input.id,
+    input.index,
+    previousParentId === input.parentId,
+  );
 }
 
 async function reorderSiblings(
@@ -477,6 +489,7 @@ async function reorderSiblings(
   movedType: "server" | "group",
   movedId: string,
   targetIndex: number,
+  sameParent: boolean,
 ): Promise<void> {
   const groups = await db
     .prepare(
@@ -510,10 +523,19 @@ async function reorderSiblings(
     })),
   ].sort((a, b) => a.sort_order - b.sort_order);
 
+  const currentIndex = siblings.findIndex(
+    (entry) => entry.type === movedType && entry.id === movedId,
+  );
   const withoutMoved = siblings.filter(
     (entry) => !(entry.type === movedType && entry.id === movedId),
   );
-  const clampedIndex = clamp(targetIndex, 0, withoutMoved.length);
+
+  let insertIndex = targetIndex;
+  if (sameParent && currentIndex !== -1 && currentIndex < insertIndex) {
+    insertIndex -= 1;
+  }
+
+  const clampedIndex = clamp(insertIndex, 0, withoutMoved.length);
   withoutMoved.splice(clampedIndex, 0, {
     type: movedType,
     id: movedId,

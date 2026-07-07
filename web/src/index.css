@@ -301,6 +301,14 @@ html[data-has-background="true"] .grid-dashboard-host {
   user-select: text;
 }
 
+.widget-body .widget-no-drag {
+  touch-action: auto;
+}
+
+.server-list-drag-handle {
+  touch-action: none;
+}
+
 .terminal-widget-host {
   background: transparent;
 }

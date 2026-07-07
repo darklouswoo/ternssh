@@ -185,6 +185,41 @@ export function isGroupDescendant(
   return walk(nodes, false);
 }
 
+export function findTreeItemLocation(
+  nodes: TreeNode[],
+  item: DragItem,
+  parentId: string | null = null,
+): { parentId: string | null; index: number } | null {
+  for (let index = 0; index < nodes.length; index += 1) {
+    const node = nodes[index];
+    if (node.type === item.type && node.id === item.id) {
+      return { parentId, index };
+    }
+    if (node.type === "group") {
+      const nested = findTreeItemLocation(node.children, item, node.id);
+      if (nested) return nested;
+    }
+  }
+  return null;
+}
+
+export function resolveMoveIndex(
+  tree: TreeNode[],
+  item: DragItem,
+  parentId: string | null,
+  targetIndex: number,
+): number {
+  const location = findTreeItemLocation(tree, item);
+  if (
+    location &&
+    location.parentId === parentId &&
+    location.index < targetIndex
+  ) {
+    return targetIndex - 1;
+  }
+  return targetIndex;
+}
+
 export type DragItem = { type: "server" | "group"; id: string };
 
 export type DropIntent =
@@ -194,23 +229,27 @@ export type DropIntent =
 export const DRAG_MIME = "application/x-ternssh-tree-item";
 
 export function readDragItem(dataTransfer: DataTransfer): DragItem | null {
-  const raw = dataTransfer.getData(DRAG_MIME);
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as DragItem;
-    if (
-      (parsed.type === "server" || parsed.type === "group") &&
-      typeof parsed.id === "string"
-    ) {
-      return parsed;
+  for (const mime of [DRAG_MIME, "text/plain"]) {
+    const raw = dataTransfer.getData(mime);
+    if (!raw) continue;
+    try {
+      const parsed = JSON.parse(raw) as DragItem;
+      if (
+        (parsed.type === "server" || parsed.type === "group") &&
+        typeof parsed.id === "string"
+      ) {
+        return parsed;
+      }
+    } catch {
+      continue;
     }
-  } catch {
-    return null;
   }
   return null;
 }
 
 export function writeDragItem(dataTransfer: DataTransfer, item: DragItem) {
-  dataTransfer.setData(DRAG_MIME, JSON.stringify(item));
+  const payload = JSON.stringify(item);
+  dataTransfer.setData(DRAG_MIME, payload);
+  dataTransfer.setData("text/plain", payload);
   dataTransfer.effectAllowed = "move";
 }
