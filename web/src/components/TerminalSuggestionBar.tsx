@@ -12,7 +12,7 @@ export function TerminalSuggestionBar({
   if (suggestions.length === 0) return null;
 
   return (
-    <div className="pointer-events-none absolute top-2 left-2 right-2 z-10 flex flex-wrap gap-1.5">
+    <div className="pointer-events-none absolute bottom-2 right-2 z-10 flex max-w-[calc(100%-1rem)] flex-wrap justify-end gap-1.5">
       {suggestions.map((item, index) => {
         const suffix = item.startsWith(partial) ? item.slice(partial.length) : item;
         return (
