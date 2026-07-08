@@ -338,6 +338,12 @@ html[data-has-background="true"] .grid-dashboard-host {
   background-color: transparent !important;
 }
 
+html[data-theme="dark"] .terminal-widget-host .xterm .composition-view,
+html[data-theme="light"] .terminal-widget-host .xterm .composition-view {
+  background: transparent;
+  color: var(--color-foreground);
+}
+
 .widget-resize-handle {
   position: absolute;
   right: 0;

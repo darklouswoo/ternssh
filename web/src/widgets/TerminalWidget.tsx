@@ -1,11 +1,16 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Plus, X } from "lucide-react";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { TerminalGhostSuggestion } from "@/components/TerminalGhostSuggestion";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/i18n";
-import { usePersonalization, type TerminalThemeColors } from "@/theme";
+import { usePersonalization } from "@/theme";
+import {
+  buildXtermTheme,
+  resolveTerminalAppearance,
+  type XtermTerminalTheme,
+} from "@/theme/terminal-theme";
 import {
   MAX_SESSION_RECONNECT_ATTEMPTS,
   type ServerSession,
@@ -106,7 +111,7 @@ interface SessionPaneProps {
   onStatusChange: (status: ServerSession["status"]) => void;
   onClosed: (reason?: SessionCloseReason) => void;
   t: (key: string, params?: Record<string, string | number>) => string;
-  terminalColors: TerminalThemeColors;
+  xtermTheme: XtermTerminalTheme;
 }
 
 function SessionPane({
@@ -115,7 +120,7 @@ function SessionPane({
   onStatusChange,
   onClosed,
   t,
-  terminalColors,
+  xtermTheme,
 }: SessionPaneProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -175,10 +180,9 @@ function SessionPane({
       convertEol: true,
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
       fontSize: 13,
-      theme: {
-        ...terminalColors,
-        background: "#00000000",
-      },
+      // Lift truecolor / low-contrast paste echo on transparent backgrounds.
+      minimumContrastRatio: 4.5,
+      theme: xtermTheme,
     });
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
@@ -199,11 +203,8 @@ function SessionPane({
   useEffect(() => {
     const terminal = terminalRef.current;
     if (!terminal) return;
-    terminal.options.theme = {
-      ...terminalColors,
-      background: "#00000000",
-    };
-  }, [terminalColors]);
+    terminal.options.theme = xtermTheme;
+  }, [xtermTheme]);
 
   useEffect(() => {
     const terminal = terminalRef.current;
@@ -252,7 +253,7 @@ function SessionPane({
         return false;
       }
       const normalized = command.replace(/\r\n/g, "\n");
-      term.write(`${normalized.replace(/\n/g, "\r\n")}\r\n`);
+      term.write(`\x1b[0m${normalized.replace(/\n/g, "\r\n")}\r\n`);
       currentWs.send(`${normalized}\n`);
       return true;
     };
@@ -460,7 +461,20 @@ export function TerminalWidget({
   onStatusChange,
 }: TerminalWidgetProps) {
   const { t } = useI18n();
-  const { resolvedTerminalColors } = usePersonalization();
+  const { resolvedTerminalColors, resolvedTheme, terminalTheme } =
+    usePersonalization();
+  const xtermTheme = useMemo(
+    () =>
+      buildXtermTheme(
+        resolvedTerminalColors,
+        resolveTerminalAppearance(
+          terminalTheme,
+          resolvedTheme,
+          resolvedTerminalColors,
+        ),
+      ),
+    [resolvedTerminalColors, resolvedTheme, terminalTheme],
+  );
   const activeSession = serverSessions.find(
     (session) => session.sessionId === activeSessionId,
   );
@@ -549,7 +563,7 @@ export function TerminalWidget({
               session.serverId === activeServerId &&
               session.sessionId === activeSessionId
             }
-            terminalColors={resolvedTerminalColors}
+            xtermTheme={xtermTheme}
             session={session}
             t={t}
             onClosed={(reason) => onSessionClosed(session.sessionId, reason)}
