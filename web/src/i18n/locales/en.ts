@@ -302,6 +302,8 @@ export const en: Messages = {
     history:
       "Last {minutes} min · Every {interval} · {current}/{max} samples",
     peak: "Peak ↓ {rx} · ↑ {tx}",
+    peakRx: "Peak {rate}",
+    peakTx: "Peak {rate}",
     load1: "1 min",
     load5: "5 min",
     load15: "15 min",

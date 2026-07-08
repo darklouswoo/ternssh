@@ -5,6 +5,7 @@ import {
   formatPollIntervalLabel,
 } from "@/lib/status-widget-config";
 import { MetricBar } from "@/widgets/shared/MetricBar";
+import { cn } from "@/lib/utils";
 
 export interface BandwidthSample {
   rx: number;
@@ -36,6 +37,47 @@ function buildBandwidthSlots(
   return slots;
 }
 
+interface BandwidthHistoryBarsProps {
+  barClassName: string;
+  getValue: (sample: BandwidthSample) => number;
+  sampleTitle: (sample: BandwidthSample) => string;
+  scaleMax: number;
+  slots: (BandwidthSample | null)[];
+}
+
+function BandwidthHistoryBars({
+  barClassName,
+  getValue,
+  sampleTitle,
+  scaleMax,
+  slots,
+}: BandwidthHistoryBarsProps) {
+  return (
+    <div className="h-14 rounded-sm bg-[var(--color-secondary)]/40 p-1">
+      <div className="flex h-full items-end gap-px">
+        {slots.map((sample, index) => (
+          <div key={index} className="flex h-full min-w-0 flex-1 items-end">
+            {sample ? (
+              <div
+                className={cn(
+                  "mx-auto w-full max-w-[8px] rounded-sm transition-all",
+                  barClassName,
+                )}
+                style={{
+                  height: `${barHeightPx(getValue(sample), scaleMax)}px`,
+                }}
+                title={sampleTitle(sample)}
+              />
+            ) : (
+              <div className="mx-auto h-1 w-full max-w-[8px] rounded-sm bg-[var(--color-secondary)]/80" />
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export interface NetworkBandwidthChartProps {
   rxRate: number | null;
   txRate: number | null;
@@ -58,12 +100,11 @@ export function NetworkBandwidthChart({
   const historyTxMax = Math.max(...history.map((sample) => sample.tx), 0);
   const rxScaleMax = historyRxMax > 0 ? historyRxMax : 1;
   const txScaleMax = historyTxMax > 0 ? historyTxMax : 1;
-  const chartScaleMax = Math.max(rxScaleMax, txScaleMax, 1);
   const slots = buildBandwidthSlots(history, maxSlots);
   const historyMinutes = BANDWIDTH_HISTORY_MS / 60000;
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
       <div className="flex items-center justify-between text-[11px]">
         <span className="text-[var(--color-muted-foreground)]">
           {interfaceLabel ?? t("status.bandwidth")}
@@ -81,7 +122,7 @@ export function NetworkBandwidthChart({
             : null
         }
         detail={formatBitrate(rxRate)}
-        barClassName="bg-sky-400"
+        barClassName="bg-sky-400/70"
       />
       <MetricBar
         label={t("status.upload")}
@@ -91,72 +132,76 @@ export function NetworkBandwidthChart({
             : null
         }
         detail={formatBitrate(txRate)}
-        barClassName="bg-[var(--color-success)]"
+        barClassName="bg-[var(--color-success)]/70"
       />
 
-      <div className="space-y-1">
-        <div className="flex items-center justify-between gap-2 text-[10px] text-[var(--color-muted-foreground)]">
-          <span>
-            {t("status.history", {
-              minutes: historyMinutes,
-              interval: formatPollIntervalLabel(pollIntervalMs, t),
-              current: history.length,
-              max: maxSlots,
-            })}
-          </span>
-          {history.length > 0 && (
-            <span className="truncate text-right">
-              {t("status.peak", {
-                rx: formatBitrate(historyRxMax || null),
-                tx: formatBitrate(historyTxMax || null),
-              })}
+      <div className="space-y-3">
+        <div className="text-[10px] text-[var(--color-muted-foreground)]">
+          {t("status.history", {
+            minutes: historyMinutes,
+            interval: formatPollIntervalLabel(pollIntervalMs, t),
+            current: history.length,
+            max: maxSlots,
+          })}
+        </div>
+
+        <div className="space-y-1">
+          <div className="flex items-center justify-between text-[10px]">
+            <span className="text-[var(--color-muted-foreground)]">
+              ↓ {t("status.download")}
             </span>
-          )}
-        </div>
-        <div className="h-16 rounded-sm bg-[var(--color-secondary)]/40 p-1">
-          <div className="flex h-full items-end gap-px">
-            {slots.map((sample, index) => (
-              <div
-                key={index}
-                className="relative h-full min-w-0 flex-1"
-              >
-                {sample ? (
-                  <>
-                    <div
-                      className="absolute bottom-0 left-1/2 w-full max-w-[8px] -translate-x-1/2 rounded-sm bg-sky-400/40 transition-all"
-                      style={{
-                        height: `${barHeightPx(sample.rx, chartScaleMax)}px`,
-                      }}
-                      title={t("status.sampleDownload", {
-                        time: new Date(sample.at).toLocaleTimeString(),
-                        rate: formatBitrate(sample.rx),
-                      })}
-                    />
-                    <div
-                      className="absolute bottom-0 left-1/2 w-full max-w-[8px] -translate-x-1/2 rounded-sm bg-[var(--color-success)]/55 transition-all"
-                      style={{
-                        height: `${barHeightPx(sample.tx, chartScaleMax)}px`,
-                      }}
-                      title={t("status.sampleUpload", {
-                        time: new Date(sample.at).toLocaleTimeString(),
-                        rate: formatBitrate(sample.tx),
-                      })}
-                    />
-                  </>
-                ) : (
-                  <div className="absolute bottom-0 left-1/2 h-1 w-full max-w-[8px] -translate-x-1/2 rounded-sm bg-[var(--color-secondary)]/80" />
-                )}
-              </div>
-            ))}
+            {history.length > 0 && (
+              <span className="text-[var(--color-muted-foreground)]">
+                {t("status.peakRx", {
+                  rate: formatBitrate(historyRxMax || null),
+                })}
+              </span>
+            )}
           </div>
+          <BandwidthHistoryBars
+            barClassName="bg-sky-400/45"
+            getValue={(sample) => sample.rx}
+            sampleTitle={(sample) =>
+              t("status.sampleDownload", {
+                time: new Date(sample.at).toLocaleTimeString(),
+                rate: formatBitrate(sample.rx),
+              })
+            }
+            scaleMax={rxScaleMax}
+            slots={slots}
+          />
         </div>
+
+        <div className="space-y-1">
+          <div className="flex items-center justify-between text-[10px]">
+            <span className="text-[var(--color-muted-foreground)]">
+              ↑ {t("status.upload")}
+            </span>
+            {history.length > 0 && (
+              <span className="text-[var(--color-muted-foreground)]">
+                {t("status.peakTx", {
+                  rate: formatBitrate(historyTxMax || null),
+                })}
+              </span>
+            )}
+          </div>
+          <BandwidthHistoryBars
+            barClassName="bg-[var(--color-success)]/50"
+            getValue={(sample) => sample.tx}
+            sampleTitle={(sample) =>
+              t("status.sampleUpload", {
+                time: new Date(sample.at).toLocaleTimeString(),
+                rate: formatBitrate(sample.tx),
+              })
+            }
+            scaleMax={txScaleMax}
+            slots={slots}
+          />
+        </div>
+
         <div className="flex justify-between text-[10px] text-[var(--color-muted-foreground)]">
           <span>{t("common.minutesAgo", { count: historyMinutes })}</span>
           <span>{t("common.now")}</span>
-        </div>
-        <div className="flex justify-between text-[10px] text-[var(--color-muted-foreground)]">
-          <span>↓ {t("status.download")}</span>
-          <span>↑ {t("status.upload")}</span>
         </div>
       </div>
     </div>

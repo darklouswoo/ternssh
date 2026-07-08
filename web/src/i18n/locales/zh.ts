@@ -290,6 +290,8 @@ export const zh = {
     history:
       "近 {minutes} 分钟 · 每 {interval} · {current}/{max} 次采样",
     peak: "峰值 ↓ {rx} · ↑ {tx}",
+    peakRx: "峰值 {rate}",
+    peakTx: "峰值 {rate}",
     load1: "1 分钟",
     load5: "5 分钟",
     load15: "15 分钟",
