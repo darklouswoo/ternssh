@@ -354,17 +354,23 @@ function SessionPane({
       }
 
       const currentSuggestions = suggestionsRef.current;
+      const suggestionIndex = activeSuggestionIndexRef.current;
+
       if (
         currentSuggestions.length > 0 &&
-        (event.key === "ArrowDown" || event.key === "ArrowUp")
+        event.key === "ArrowUp" &&
+        suggestionIndex > 0
       ) {
         event.preventDefault();
-        setActiveSuggestionIndex((index) => {
-          if (event.key === "ArrowDown") {
-            return Math.min(index + 1, currentSuggestions.length - 1);
-          }
-          return Math.max(index - 1, 0);
-        });
+        setActiveSuggestionIndex((index) => Math.max(index - 1, 0));
+        return false;
+      }
+
+      if (currentSuggestions.length > 0 && event.key === "ArrowDown") {
+        event.preventDefault();
+        setActiveSuggestionIndex((index) =>
+          Math.min(index + 1, currentSuggestions.length - 1),
+        );
         return false;
       }
 
