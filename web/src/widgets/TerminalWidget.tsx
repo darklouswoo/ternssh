@@ -277,6 +277,7 @@ function SessionPane({
       if (closeReason !== "auth_failed") {
         terminal.writeln(`\r\n${t("session.disconnected")}`);
       }
+      onStatusChangeRef.current(closeReason === "auth_failed" ? "error" : "closed");
       onClosedRef.current(closeReason);
     };
 

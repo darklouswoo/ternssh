@@ -237,7 +237,6 @@ export function DashboardView() {
       const { serverId } = session;
       if (manualDisconnectServersRef.current.has(serverId)) return;
       if (manualCloseSessionsRef.current.has(sessionId)) return;
-      if (session.status === "connecting") return;
       if (reconnectTimerRef.current.has(serverId)) return;
 
       const nextAttempt = (reconnectAttemptRef.current.get(serverId) ?? 0) + 1;
