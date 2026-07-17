@@ -318,6 +318,10 @@ function SessionPane({
     };
 
     const onData = terminal.onData((input) => {
+      if (input === "\t" && suggestionsRef.current.length > 0) {
+        return;
+      }
+
       if (input.includes("\r") || input === "\n") {
         const command = draftRef.current.trim();
         if (command) {

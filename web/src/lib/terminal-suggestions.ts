@@ -236,25 +236,38 @@ function sharesPrefix(value: string, prefix: string): boolean {
   return value.slice(0, prefix.length).toLowerCase() === prefix.toLowerCase();
 }
 
+function limitCompletionSegment(text: string): string {
+  let end = text.length;
+  const slash = text.indexOf("/");
+  const space = text.indexOf(" ");
+  if (slash >= 0) end = Math.min(end, slash);
+  if (space >= 0) end = Math.min(end, space);
+  return text.slice(0, end);
+}
+
 export function completionSuffix(partial: string, suggestion: string): string {
   if (!suggestion) return "";
 
   if (sharesPrefix(suggestion, partial)) {
-    return suggestion.slice(partial.length);
+    const limitedSuggestion =
+      suggestion.slice(0, partial.length) +
+      limitCompletionSegment(suggestion.slice(partial.length));
+    return limitedSuggestion.slice(partial.length);
   }
 
   const { head, token } = splitPartial(partial);
   if (!token) return "";
 
   if (head && sharesPrefix(suggestion, head)) {
-    const tail = suggestion.slice(head.length);
+    const tail = limitCompletionSegment(suggestion.slice(head.length));
     if (sharesPrefix(tail, token)) {
       return tail.slice(token.length);
     }
   }
 
-  if (sharesPrefix(suggestion, token)) {
-    return suggestion.slice(token.length);
+  const limited = limitCompletionSegment(suggestion);
+  if (sharesPrefix(limited, token)) {
+    return limited.slice(token.length);
   }
 
   return "";
@@ -262,22 +275,22 @@ export function completionSuffix(partial: string, suggestion: string): string {
 
 function completedTail(partial: string, suggestion: string): string {
   const { head, token } = splitPartial(partial);
-  if (!token) return suggestion;
+  if (!token) return limitCompletionSegment(suggestion);
 
   if (head && sharesPrefix(suggestion, head)) {
-    return suggestion.slice(head.length);
+    return limitCompletionSegment(suggestion.slice(head.length));
   }
 
   if (sharesPrefix(suggestion, token)) {
-    return suggestion;
+    return limitCompletionSegment(suggestion);
   }
 
-  return suggestion;
+  return limitCompletionSegment(suggestion);
 }
 
 /**
- * Build bytes to send for Tab completion. Replaces the last token on the server
- * so lagging echo (network) cannot stack suffixes onto a stale PTY cursor.
+ * Build bytes to send for Tab completion. Prefer appending a suffix over
+ * backspaces so network lag and shell readline state stay in sync.
  */
 export function buildCompletionPayload(
   partial: string,
@@ -288,7 +301,10 @@ export function buildCompletionPayload(
   const partialTrimmed = partial.trimStart();
 
   if (sharesPrefix(suggestion, partialTrimmed)) {
-    const suffix = suggestion.slice(partialTrimmed.length);
+    const limitedSuggestion =
+      suggestion.slice(0, partialTrimmed.length) +
+      limitCompletionSegment(suggestion.slice(partialTrimmed.length));
+    const suffix = limitedSuggestion.slice(partialTrimmed.length);
     if (!suffix) return null;
     return {
       payload: suffix,
@@ -301,6 +317,15 @@ export function buildCompletionPayload(
 
   const { head, token } = splitPartial(partialTrimmed);
   const tail = completedTail(partialTrimmed, suggestion);
+
+  if (sharesPrefix(tail, token)) {
+    const appendSuffix = tail.slice(token.length);
+    if (!appendSuffix) return null;
+    return {
+      payload: appendSuffix,
+      nextDraft: head + tail,
+    };
+  }
 
   return {
     payload: "\x7f".repeat(token.length) + tail,
