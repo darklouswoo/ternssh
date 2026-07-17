@@ -232,6 +232,7 @@ export function findTerminalSuggestions(
 }
 
 function sharesPrefix(value: string, prefix: string): boolean {
+  if (!prefix) return false;
   if (prefix.length > value.length) return false;
   return value.slice(0, prefix.length).toLowerCase() === prefix.toLowerCase();
 }
@@ -299,6 +300,7 @@ export function buildCompletionPayload(
   if (!suggestion) return null;
 
   const partialTrimmed = partial.trimStart();
+  if (!partialTrimmed) return null;
 
   if (sharesPrefix(suggestion, partialTrimmed)) {
     const limitedSuggestion =

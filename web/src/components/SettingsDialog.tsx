@@ -213,12 +213,6 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
           {section === "personalization" && <PersonalizationSection />}
         </div>
       </div>
-
-      <div className="flex justify-end border-t border-[var(--color-border)] px-6 py-4">
-        <Button variant="secondary" onClick={() => onOpenChange(false)}>
-          {t("common.close")}
-        </Button>
-      </div>
     </Modal>
   );
 }

@@ -135,6 +135,7 @@ function SessionPane({
   const suggestionsRef = useRef<string[]>([]);
   const activeSuggestionIndexRef = useRef(0);
   const draftRef = useRef("");
+  const clientTabHandledRef = useRef(false);
   suggestionsRef.current = suggestions;
   activeSuggestionIndexRef.current = activeSuggestionIndex;
   onStatusChangeRef.current = onStatusChange;
@@ -145,6 +146,8 @@ function SessionPane({
       session.serverId,
       nextPartial,
     );
+    suggestionsRef.current = nextSuggestions;
+    activeSuggestionIndexRef.current = 0;
     setPartial(nextPartial);
     setSuggestions(nextSuggestions);
     setActiveSuggestionIndex(0);
@@ -317,9 +320,18 @@ function SessionPane({
       })();
     };
 
+    const hasClientTabMatches = () =>
+      findTerminalSuggestions(session.serverId, draftRef.current).length > 0;
+
     const onData = terminal.onData((input) => {
-      if (input === "\t" && suggestionsRef.current.length > 0) {
-        return;
+      if (input === "\t") {
+        if (clientTabHandledRef.current) {
+          clientTabHandledRef.current = false;
+          return;
+        }
+        if (hasClientTabMatches()) {
+          return;
+        }
       }
 
       if (input.includes("\r") || input === "\n") {
@@ -328,6 +340,7 @@ function SessionPane({
           pushTerminalHistory(session.serverId, command);
         }
         draftRef.current = "";
+        suggestionsRef.current = [];
         setSuggestions([]);
         setPartial("");
         setActiveSuggestionIndex(0);
@@ -386,8 +399,11 @@ function SessionPane({
         if (matches.length === 0) return true;
 
         event.preventDefault();
+        clientTabHandledRef.current = true;
         const pick =
-          matches[activeSuggestionIndexRef.current] ?? matches[0] ?? "";
+          matches[Math.min(activeSuggestionIndexRef.current, matches.length - 1)] ??
+          matches[0] ??
+          "";
         if (pick) applySuggestion(pick);
         return false;
       }
